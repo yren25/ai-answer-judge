@@ -33,7 +33,11 @@ export async function askQwen(question: string): Promise<string> {
       body: JSON.stringify({
         model: QWEN_MODEL,
         messages: [
-          { role: "system", content: "你是一个有帮助的AI助手" },
+          {
+            role: "system",
+            content:
+              "你是一个有帮助的AI助手。需要 emoji 时请直接输出 Unicode 字符；不要用 Markdown 的 ** 包裹 emoji。",
+          },
           { role: "user", content: question },
         ],
       }),

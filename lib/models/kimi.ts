@@ -22,7 +22,11 @@ export async function askKimi(question: string): Promise<string> {
       body: JSON.stringify({
         model: KIMI_MODEL,
         messages: [
-          { role: "system", content: "你是一个有帮助的中文AI助手。" },
+          {
+            role: "system",
+            content:
+              "你是一个有帮助的中文AI助手。需要 emoji 时请直接输出 Unicode 字符；不要用 Markdown 的 ** 包裹 emoji（例如不要写 **😊**）。正文加粗请尽量少用。",
+          },
           { role: "user", content: question },
         ],
       }),

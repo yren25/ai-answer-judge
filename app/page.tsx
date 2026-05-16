@@ -11,10 +11,28 @@ import {
   useState,
 } from "react";
 
+import {
+  ANSWER_EMOJI_FONT_STACK,
+  answerGraphemeLength,
+  postProcessFusedAnswerHeadings,
+  renderAnswerBody,
+  sliceAnswerText,
+  stripIncompleteMarkdownBold,
+} from "@/lib/answerText";
 import { clampHistoryTitle } from "@/lib/historyTitle";
 
 /** Bump when replacing file so browsers skip cached PNG / old optimizer output. */
 const DEEPSEEK_ICON_SRC = "/brands/deepseek.png?v=5";
+const WELCOME_ROBOT_VIDEO_WEBM = "/welcome/robot-waving.webm?v=1";
+const WELCOME_ROBOT_VIDEO_MP4 = "/welcome/robot-waving.mp4?v=1";
+
+/**
+ * 包打听logo — 品牌机器人图（`/public/brands/btd-logo.png`）。
+ * 说「包打听logo」即替换本常量及所有引用处，目前用于：
+ * - 对话区 AI 侧头像（查看融合答案时）
+ * - 答案卡片底部来源切换条的第一个 tab（融合）
+ */
+const BTD_LOGO_SRC = "/brands/btd-logo.png?v=1";
 
 type AnswerTab = "fused" | "deepseek" | "kimi" | "qwen";
 
@@ -40,6 +58,12 @@ type ChatTurn = {
   error: string;
   activeTab: AnswerTab;
 };
+
+/** 欢迎页「参与智能融合的模型」栏；需要展示时改为 true */
+const SHOW_WELCOME_FUSED_MODELS = false;
+
+/** 欢迎页输入框旁招手机器人；需要展示时改为 true */
+const SHOW_WELCOME_WAVING_ROBOT = false;
 
 const FUSED_MODELS = [
   {
@@ -183,7 +207,14 @@ function answerPanelForTab(
 ): { title: string; body: string } {
   switch (tab) {
     case "fused":
-      return { title: "✨ 融合后的最佳答案", body: turn.fusedAnswer };
+      return {
+        title: "",
+        body: postProcessFusedAnswerHeadings(turn.fusedAnswer, {
+          deepseekAnswer: turn.deepseekAnswer,
+          kimiAnswer: turn.kimiAnswer,
+          qwenAnswer: turn.qwenAnswer,
+        }),
+      };
     case "deepseek":
       return { title: "DeepSeek 原始回答", body: turn.deepseekAnswer };
     case "kimi":
@@ -191,6 +222,72 @@ function answerPanelForTab(
     default:
       return { title: "Qwen 原始回答", body: turn.qwenAnswer };
   }
+}
+
+/** 各答案来源对应的图标（融合 = 包打听logo） */
+function answerSourceBrandIcon(tab: AnswerTab): {
+  src: string;
+  alt: string;
+  unoptimized?: boolean;
+  iconBg: string;
+  iconClass: string;
+} {
+  switch (tab) {
+    case "fused":
+      return {
+        src: BTD_LOGO_SRC,
+        alt: "包打听",
+        unoptimized: true,
+        iconBg: "bg-sky-100",
+        iconClass: "object-cover",
+      };
+    case "deepseek":
+      return {
+        src: DEEPSEEK_ICON_SRC,
+        alt: "DeepSeek",
+        unoptimized: true,
+        iconBg: "bg-white",
+        iconClass: "bg-white object-contain p-1.5",
+      };
+    case "kimi":
+      return {
+        src: "/brands/kimi.png",
+        alt: "Kimi",
+        iconBg: "bg-black",
+        iconClass: "object-contain p-2",
+      };
+    default:
+      return {
+        src: "/brands/qwen.png",
+        alt: "Qwen",
+        iconBg: "bg-white",
+        iconClass: "object-contain p-2",
+      };
+  }
+}
+
+/** 包打听logo 圆角头像（固定尺寸，用于 tab 与对话头像） */
+function BtdLogoAvatar({
+  className = "h-9 w-9 sm:h-10 sm:w-10",
+  sizes = "40px",
+}: {
+  className?: string;
+  sizes?: string;
+}) {
+  return (
+    <span
+      className={`relative mt-0.5 flex shrink-0 overflow-hidden rounded-full ring-1 ring-violet-400/25 ${className}`}
+    >
+      <Image
+        src={BTD_LOGO_SRC}
+        alt="包打听"
+        fill
+        sizes={sizes}
+        unoptimized
+        className="object-cover"
+      />
+    </span>
+  );
 }
 
 const ANSWER_TABS: AnswerTab[] = ["fused", "deepseek", "kimi", "qwen"];
@@ -245,15 +342,16 @@ function AnswerBodyStream({
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     if (mq.matches) {
-      setShown(full.length);
+      setShown(answerGraphemeLength(full));
       fireConsumed();
       return;
     }
 
+    const totalG = answerGraphemeLength(full);
     const perMs = 16;
     const maxMs = 14000;
     const minMs = 480;
-    const duration = Math.min(maxMs, Math.max(minMs, full.length * perMs));
+    const duration = Math.min(maxMs, Math.max(minMs, totalG * perMs));
     const start = performance.now();
     let raf = 0;
     let cancelled = false;
@@ -262,11 +360,11 @@ function AnswerBodyStream({
       if (cancelled) return;
       const t = Math.min(1, (now - start) / duration);
       const eased = 1 - (1 - t) ** 2.4;
-      const next = Math.min(full.length, Math.floor(full.length * eased));
+      const next = Math.min(totalG, Math.floor(totalG * eased));
       setShown(next);
       if (t < 1) raf = requestAnimationFrame(tick);
       else {
-        setShown(full.length);
+        setShown(totalG);
         fireConsumed();
       }
     };
@@ -279,16 +377,21 @@ function AnswerBodyStream({
   }, [text, revealKey, fireConsumed]);
 
   const full = text ?? "";
-  const slice = full.slice(0, shown);
-  const streaming = shown < full.length;
+  const totalG = answerGraphemeLength(full);
+  const rawSlice = sliceAnswerText(full, shown);
+  const slice =
+    shown < totalG
+      ? stripIncompleteMarkdownBold(rawSlice)
+      : rawSlice;
+  const streaming = shown < totalG;
 
   return (
     <p
-      className={`relative z-0 whitespace-pre-wrap break-words text-sm font-normal leading-[1.8] ${
+      className={`answer-body-text relative z-0 whitespace-pre-wrap break-words text-sm font-normal leading-[1.8] ${
         isDark ? "text-zinc-200" : "text-zinc-800"
       }`}
     >
-      {slice}
+      {renderAnswerBody(slice)}
       {streaming ? (
         <span
           className={`ml-0.5 inline-block h-[1em] w-px translate-y-px align-text-bottom motion-safe:animate-pulse ${
@@ -309,6 +412,273 @@ const ANSWER_TAB_AXIS_ORDER: Record<AnswerTab, number> = {
   qwen: 3,
 };
 
+/** 欢迎页：输入框右上角循环招手的机器人（透明 WebM；MP4 回退时 multiply 去白底） */
+function WelcomeWavingRobot() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [useMultiplyCutout, setUseMultiplyCutout] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = true;
+    const syncCutoutMode = () => {
+      const src = video.currentSrc || video.src;
+      setUseMultiplyCutout(!src.includes(".webm"));
+    };
+    const tryPlay = () => {
+      syncCutoutMode();
+      void video.play().catch(() => {});
+    };
+    tryPlay();
+    video.addEventListener("loadeddata", tryPlay);
+    video.addEventListener("loadedmetadata", syncCutoutMode);
+    return () => {
+      video.removeEventListener("loadeddata", tryPlay);
+      video.removeEventListener("loadedmetadata", syncCutoutMode);
+    };
+  }, []);
+
+  return (
+    <div
+      className="welcome-robot-anchor pointer-events-none absolute bottom-full right-0 z-20 translate-y-[14%] sm:right-1 sm:translate-y-[16%]"
+      aria-hidden
+    >
+      <video
+        ref={videoRef}
+        className={`welcome-robot-video h-[7.25rem] w-[7.25rem] object-contain object-bottom sm:h-[9.25rem] sm:w-[9.25rem] ${
+          useMultiplyCutout ? "welcome-robot-video--cutout" : ""
+        }`}
+        muted
+        autoPlay
+        loop
+        playsInline
+        preload="auto"
+        disablePictureInPicture
+        controls={false}
+        controlsList="nodownload nofullscreen noremoteplayback"
+        tabIndex={-1}
+      >
+        <source src={WELCOME_ROBOT_VIDEO_WEBM} type="video/webm" />
+        <source src={WELCOME_ROBOT_VIDEO_MP4} type="video/mp4" />
+      </video>
+    </div>
+  );
+}
+
+/** 用户侧头像占位（😉 + 白底圆；后续可换成 Image） */
+function ChatUserAvatarPlaceholder({ isDark }: { isDark: boolean }) {
+  return (
+    <span
+      className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-[1.35rem] leading-none ring-1 sm:h-10 sm:w-10 sm:text-[1.45rem] ${
+        isDark ? "ring-zinc-600/50" : "ring-zinc-200/90"
+      }`}
+      style={{ fontFamily: ANSWER_EMOJI_FONT_STACK }}
+      role="img"
+      aria-label="用户"
+    >
+      😉
+    </span>
+  );
+}
+
+/** 对话区 AI 头像：融合答案用包打听logo，切换平台后用该平台 logo */
+function ChatAssistantAvatar({ activeTab }: { activeTab: AnswerTab }) {
+  if (activeTab === "fused") {
+    return <BtdLogoAvatar />;
+  }
+  const brand = answerSourceBrandIcon(activeTab);
+  return (
+    <span
+      className={`relative mt-0.5 flex h-9 w-9 shrink-0 overflow-hidden rounded-full ring-1 ring-zinc-400/40 sm:h-10 sm:w-10 ${brand.iconBg}`}
+    >
+      <Image
+        src={brand.src}
+        alt={brand.alt}
+        fill
+        sizes="40px"
+        unoptimized={brand.unoptimized}
+        className={brand.iconClass}
+      />
+    </span>
+  );
+}
+
+/** 每条答案底部的 AI 来源切换（融合 + 各平台） */
+function AnswerSourceTabBar({
+  turnId,
+  activeTab,
+  isDark,
+  tabActive,
+  tabInactive,
+  tabFocus,
+  onSelect,
+}: {
+  turnId: string;
+  activeTab: AnswerTab;
+  isDark: boolean;
+  tabActive: string;
+  tabInactive: string;
+  tabFocus: string;
+  onSelect: (tab: AnswerTab) => void;
+}) {
+  const tabSize = (selected: boolean) =>
+    selected
+      ? "h-11 w-11 min-h-11 min-w-11 sm:h-12 sm:w-12 sm:min-h-12 sm:min-w-12"
+      : "h-9 w-9 min-h-9 min-w-9 sm:h-10 sm:w-10 sm:min-h-10 sm:min-w-10";
+
+  return (
+    <div
+      className={`mt-4 border-t pt-3.5 sm:mt-5 sm:pt-4 ${
+        isDark ? "border-zinc-700/80" : "border-zinc-200/90"
+      }`}
+    >
+      <p
+        className={`mb-2.5 text-[11px] font-medium leading-snug sm:mb-3 sm:text-xs ${
+          isDark ? "text-zinc-400" : "text-zinc-500"
+        }`}
+      >
+        查看其他回答：
+      </p>
+      <div
+        role="tablist"
+        aria-label="切换答案来源"
+        className="flex flex-wrap items-center justify-start gap-2 sm:gap-2.5"
+      >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "fused"}
+        id={`tab-fused-${turnId}`}
+        aria-controls={`answer-panel-${turnId}`}
+        onClick={() => onSelect("fused")}
+        title="包打听融合答案"
+        className={`relative shrink-0 overflow-hidden rounded-full bg-sky-100 outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${tabSize(activeTab === "fused")} ${
+          isDark
+            ? "focus-visible:ring-offset-zinc-950"
+            : "focus-visible:ring-offset-white"
+        } ${activeTab === "fused" ? tabActive : tabInactive}`}
+      >
+        <Image
+          src={BTD_LOGO_SRC}
+          alt="包打听"
+          fill
+          sizes="48px"
+          unoptimized
+          className="object-cover"
+        />
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "deepseek"}
+        id={`tab-deepseek-${turnId}`}
+        aria-controls={`answer-panel-${turnId}`}
+        onClick={() => onSelect("deepseek")}
+        title="DeepSeek 原始回答"
+        className={`relative shrink-0 rounded-full bg-white outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${tabSize(activeTab === "deepseek")} ${
+          isDark
+            ? "focus-visible:ring-offset-zinc-950"
+            : "focus-visible:ring-offset-white"
+        } ${activeTab === "deepseek" ? tabActive : tabInactive}`}
+      >
+        <span className="absolute inset-0 overflow-hidden rounded-full bg-white">
+          <Image
+            src={DEEPSEEK_ICON_SRC}
+            alt="DeepSeek"
+            fill
+            sizes="48px"
+            unoptimized
+            className="bg-white object-contain p-1.5"
+          />
+        </span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "kimi"}
+        id={`tab-kimi-${turnId}`}
+        aria-controls={`answer-panel-${turnId}`}
+        onClick={() => onSelect("kimi")}
+        title="Kimi 原始回答"
+        className={`relative shrink-0 rounded-full bg-black outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${tabSize(activeTab === "kimi")} ${
+          isDark
+            ? "focus-visible:ring-offset-zinc-950"
+            : "focus-visible:ring-offset-white"
+        } ${activeTab === "kimi" ? tabActive : tabInactive}`}
+      >
+        <span className="absolute inset-0 overflow-hidden rounded-full bg-black">
+          <Image
+            src="/brands/kimi.png"
+            alt="Kimi"
+            fill
+            sizes="48px"
+            className="object-contain p-2"
+          />
+        </span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "qwen"}
+        id={`tab-qwen-${turnId}`}
+        aria-controls={`answer-panel-${turnId}`}
+        onClick={() => onSelect("qwen")}
+        title="Qwen 原始回答"
+        className={`relative shrink-0 rounded-full bg-white outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${tabSize(activeTab === "qwen")} ${
+          isDark
+            ? "focus-visible:ring-offset-zinc-950"
+            : "focus-visible:ring-offset-white"
+        } ${activeTab === "qwen" ? tabActive : tabInactive}`}
+      >
+        <span className="absolute inset-0 overflow-hidden rounded-full bg-white">
+          <Image
+            src="/brands/qwen.png"
+            alt="Qwen"
+            fill
+            sizes="48px"
+            className="object-contain p-2"
+          />
+        </span>
+      </button>
+      </div>
+    </div>
+  );
+}
+
+function useAnswerTabSlideClass(activeTab: AnswerTab): string {
+  const prevOrderRef = useRef<number | null>(null);
+  const o = ANSWER_TAB_AXIS_ORDER[activeTab];
+  const p = prevOrderRef.current;
+  let slideClass = "";
+  if (p !== null && p !== o) {
+    slideClass =
+      o > p ? "answer-source-smart-in-right" : "answer-source-smart-in-left";
+  }
+  useLayoutEffect(() => {
+    prevOrderRef.current = o;
+  }, [o]);
+  return slideClass;
+}
+
+function AnswerTabEnterTransition({
+  activeTab,
+  children,
+  className = "",
+}: {
+  activeTab: AnswerTab;
+  children: ReactNode;
+  className?: string;
+}) {
+  const slideClass = useAnswerTabSlideClass(activeTab);
+  return (
+    <div className={`min-w-0 overflow-x-hidden ${className}`.trim()}>
+      <div key={activeTab} className={`min-w-0 ${slideClass}`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function AnswerPanelTabSwitch({
   activeTab,
   children,
@@ -316,23 +686,77 @@ function AnswerPanelTabSwitch({
   activeTab: AnswerTab;
   children: ReactNode;
 }) {
-  const prevOrderRef = useRef<number | null>(null);
-  const o = ANSWER_TAB_AXIS_ORDER[activeTab];
-  const p = prevOrderRef.current;
-  let slideClass = "";
-  if (p !== null && p !== o) {
-    slideClass =
-      o > p ? "answer-source-from-right" : "answer-source-from-left";
-  }
+  return (
+    <AnswerTabEnterTransition activeTab={activeTab}>
+      {children}
+    </AnswerTabEnterTransition>
+  );
+}
+
+/** 切换 tab 时平滑过渡答案区高度（避免对话框突然跳变） */
+function AnswerPanelHeightTransition({
+  activeTab,
+  children,
+}: {
+  activeTab: AnswerTab;
+  children: ReactNode;
+}) {
+  const shellRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const skipNextRef = useRef(true);
+
   useLayoutEffect(() => {
-    prevOrderRef.current = o;
-  }, [o]);
+    const shell = shellRef.current;
+    const inner = innerRef.current;
+    if (!shell || !inner) return;
+
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const nextH = inner.scrollHeight;
+
+    if (skipNextRef.current) {
+      skipNextRef.current = false;
+      shell.style.height = "";
+      shell.style.transition = "";
+      shell.style.overflow = "";
+      return;
+    }
+
+    if (reduced) {
+      shell.style.height = "";
+      shell.style.transition = "";
+      shell.style.overflow = "";
+      return;
+    }
+
+    const startH = shell.getBoundingClientRect().height;
+    if (Math.abs(startH - nextH) < 2) return;
+
+    shell.style.overflow = "hidden";
+    shell.style.height = `${startH}px`;
+    shell.classList.add("answer-panel-height-transition");
+
+    const raf = requestAnimationFrame(() => {
+      shell.style.height = `${nextH}px`;
+    });
+
+    const onEnd = (e: TransitionEvent) => {
+      if (e.propertyName !== "height" || e.target !== shell) return;
+      shell.style.height = "";
+      shell.style.transition = "";
+      shell.style.overflow = "";
+      shell.removeEventListener("transitionend", onEnd);
+    };
+    shell.addEventListener("transitionend", onEnd);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      shell.removeEventListener("transitionend", onEnd);
+    };
+  }, [activeTab]);
 
   return (
-    <div className="min-w-0 overflow-x-hidden">
-      <div key={activeTab} className={`min-w-0 ${slideClass}`}>
-        {children}
-      </div>
+    <div ref={shellRef} className="min-h-0">
+      <div ref={innerRef}>{children}</div>
     </div>
   );
 }
@@ -1110,7 +1534,7 @@ export default function Home() {
       className={`relative min-h-dvh w-full min-w-0 ${
         isDark
           ? "bg-zinc-950 text-zinc-100"
-          : "bg-gradient-to-b from-violet-50/90 via-zinc-50 to-blue-50/90 text-zinc-900"
+          : "bg-zinc-50 text-zinc-900"
       }`}
     >
       <aside
@@ -1321,15 +1745,7 @@ export default function Home() {
           <div
             aria-hidden
             className={`pointer-events-none absolute inset-0 -z-10 ${
-              isDark ? "bg-zinc-950" : "bg-gradient-to-b from-violet-50/95 via-zinc-50 to-zinc-50"
-            }`}
-          />
-          <div
-            aria-hidden
-            className={`pointer-events-none absolute inset-0 -z-10 ${
-              isDark
-                ? "bg-[radial-gradient(ellipse_125%_85%_at_50%_-20%,rgba(99,102,241,0.06)_0%,rgba(59,130,246,0.032)_32%,rgba(37,99,235,0.015)_52%,transparent_72%)]"
-                : "bg-[radial-gradient(ellipse_120%_80%_at_50%_-20%,rgba(99,102,241,0.09)_0%,rgba(59,130,246,0.05)_38%,rgba(96,165,250,0.028)_55%,transparent_76%)]"
+              isDark ? "bg-zinc-950" : "bg-zinc-50"
             }`}
           />
           <div className="relative z-10 flex items-center gap-2">
@@ -1353,7 +1769,7 @@ export default function Home() {
               } ${
                 isDark
                   ? "focus-visible:ring-offset-zinc-950"
-                  : "focus-visible:ring-offset-violet-50"
+                  : "focus-visible:ring-offset-zinc-50"
               }`}
             >
               <IconPlus
@@ -1382,7 +1798,7 @@ export default function Home() {
               } ${
                 isDark
                   ? "focus-visible:ring-offset-zinc-950"
-                  : "focus-visible:ring-offset-violet-50"
+                  : "focus-visible:ring-offset-zinc-50"
               }`}
             >
               <IconMenu
@@ -1402,7 +1818,7 @@ export default function Home() {
             } ${
               isDark
                 ? "focus-visible:ring-offset-zinc-950"
-                : "focus-visible:ring-offset-violet-50"
+                : "focus-visible:ring-offset-zinc-50"
             }`}
             aria-label={isDark ? "切换为浅色主题" : "切换为深色主题"}
             title={isDark ? "浅色模式" : "深色模式"}
@@ -1415,22 +1831,6 @@ export default function Home() {
           </button>
         </header>
       ) : null}
-      <div
-        className={
-          isDark
-            ? "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_125%_85%_at_50%_-20%,rgba(99,102,241,0.06)_0%,rgba(59,130,246,0.032)_32%,rgba(37,99,235,0.015)_52%,transparent_72%)]"
-            : "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_120%_80%_at_50%_-20%,rgba(99,102,241,0.09)_0%,rgba(59,130,246,0.05)_38%,rgba(96,165,250,0.028)_55%,transparent_76%)]"
-        }
-        aria-hidden
-      />
-      <div
-        className={
-          isDark
-            ? "pointer-events-none absolute bottom-0 left-1/2 h-[min(48vh,30rem)] w-[min(160%,90rem)] max-w-none -translate-x-1/2 bg-[radial-gradient(ellipse_80%_50%_at_50%_110%,rgba(109,40,217,0.22),transparent)]"
-            : "pointer-events-none absolute bottom-0 left-1/2 h-[min(44vh,28rem)] w-[min(150%,80rem)] max-w-none -translate-x-1/2 bg-[radial-gradient(ellipse_80%_50%_at_50%_108%,rgba(109,40,217,0.12),transparent)]"
-        }
-        aria-hidden
-      />
 
       {!chatSessionActive ? (
       <div
@@ -1460,7 +1860,7 @@ export default function Home() {
           >
             <p>
               {
-                "AI 助手 bTd（包打听）会整合国内多家主流 AI 平台，为你生成更全面、更个性化、经过智能筛选的最优答案。"
+                "AI 助手 bTd（包打听）将为你生成更全面、更个性化的最优答案。"
               }
             </p>
             <p className={isDark ? "text-zinc-200/88" : "text-zinc-600"}>
@@ -1480,9 +1880,11 @@ export default function Home() {
           </p>
         ) : null}
 
-        {/* 输入区 · 与主栏同宽，小屏避免横向撑破视口 */}
-        <div
-          className={`w-full max-w-3xl sm:max-w-none ${
+        {/* 输入区 · 与主栏同宽；右上角招手机器人站在输入框上沿 */}
+        <div className="relative w-full max-w-3xl overflow-visible sm:max-w-none">
+          {SHOW_WELCOME_WAVING_ROBOT ? <WelcomeWavingRobot /> : null}
+          <div
+            className={`w-full ${
             isDark
               ? "rounded-2xl border border-zinc-800/90 bg-zinc-900/90 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.65)] backdrop-blur-xl"
               : "rounded-2xl border border-zinc-300/80 bg-white/90 shadow-[0_24px_64px_-20px_rgba(91,33,182,0.15),0_8px_28px_-8px_rgba(37,99,235,0.08)] backdrop-blur-xl"
@@ -1564,8 +1966,9 @@ export default function Home() {
             </div>
           </div>
         </div>
+        </div>
 
-        {/* 参与融合的模型 · 小屏整组居中，杜绝 min-w-max 横向溢出 */}
+        {SHOW_WELCOME_FUSED_MODELS ? (
         <section
           className="mt-8 w-full max-w-3xl sm:mt-10 sm:max-w-none"
           aria-labelledby="fused-models-heading"
@@ -1624,6 +2027,7 @@ export default function Home() {
             </div>
           </div>
         </section>
+        ) : null}
 
       </div>
       ) : (
@@ -1654,9 +2058,9 @@ export default function Home() {
               id={`thread-user-anchor-${turn.id}`}
               className="flex min-w-0 max-sm:scroll-mt-[calc(3.25rem+max(0.75rem,env(safe-area-inset-top,0px)))] flex-col gap-4 sm:gap-5"
             >
-              <div className="flex justify-end">
+              <div className="flex items-start justify-end gap-2.5 sm:gap-3">
                 <p
-                  className={`max-w-[min(100%,26rem)] whitespace-pre-wrap break-words rounded-2xl rounded-br-md px-3.5 py-2.5 text-left text-sm leading-[1.8] ${
+                  className={`max-w-[min(100%,calc(100%-3.25rem))] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm px-3.5 py-2.5 text-left text-sm leading-[1.8] sm:max-w-[min(26rem,calc(100%-3.5rem))] ${
                     isDark
                       ? "bg-violet-950/55 text-zinc-100 ring-1 ring-violet-500/20"
                       : "bg-violet-100/95 text-zinc-900 ring-1 ring-violet-200/80"
@@ -1664,12 +2068,14 @@ export default function Home() {
                 >
                   {turn.userMessage}
                 </p>
+                <ChatUserAvatarPlaceholder isDark={isDark} />
               </div>
 
               {turn.status === "loading" ? (
-                <div className="flex flex-col items-stretch py-1 sm:py-2">
+                <div className="flex items-start gap-2.5 py-1 sm:gap-3 sm:py-2">
+                  <ChatAssistantAvatar activeTab="fused" />
                   <div
-                    className={`w-full rounded-2xl border px-4 py-4 shadow-inner sm:px-5 sm:py-5 ${
+                    className={`min-w-0 flex-1 max-w-[min(100%,calc(100%-3.25rem))] rounded-2xl border px-4 py-4 shadow-inner sm:max-w-[min(100%,calc(100%-3.5rem))] sm:px-5 sm:py-5 ${
                       isDark
                         ? "border-zinc-800/80 bg-zinc-900/60"
                         : "border-violet-200/60 bg-white/85"
@@ -1751,160 +2157,30 @@ export default function Home() {
               ) : null}
 
               {turn.status === "error" ? (
-                <div
-                  className={`rounded-2xl border p-4 text-sm leading-[1.8] sm:p-5 ${
-                    isDark
-                      ? "border-red-900/60 bg-red-950/40 text-red-200/95"
-                      : "border-red-200 bg-red-50/95 text-red-800"
-                  }`}
-                  role="alert"
-                >
-                  {turn.error}
+                <div className="flex items-start gap-2.5 sm:gap-3">
+                  <ChatAssistantAvatar activeTab="fused" />
+                  <div
+                    className={`min-w-0 flex-1 max-w-[min(100%,calc(100%-3.25rem))] rounded-2xl border p-4 text-sm leading-[1.8] sm:max-w-[min(100%,calc(100%-3.5rem))] sm:p-5 ${
+                      isDark
+                        ? "border-red-900/60 bg-red-950/40 text-red-200/95"
+                        : "border-red-200 bg-red-50/95 text-red-800"
+                    }`}
+                    role="alert"
+                  >
+                    {turn.error}
+                  </div>
                 </div>
               ) : null}
 
               {turn.status === "done" ? (
-                <div className="relative z-0 mt-2 min-w-0 overflow-visible sm:mt-2">
-                  <div className="pointer-events-none absolute inset-x-0 top-0 z-10 overflow-visible px-4 sm:px-6">
-                    <div className="pointer-events-auto mx-auto w-full max-w-full -translate-y-1/2 overflow-visible">
-                      <div className="h-[3.25rem] overflow-visible">
-                        <div className="-mx-2 overflow-x-auto overflow-y-visible overscroll-x-contain px-2 py-3 [scrollbar-width:thin] sm:-mx-3 sm:px-3">
-                          <div
-                            role="tablist"
-                            aria-label="切换答案来源"
-                            className="flex h-[3.25rem] min-w-max flex-nowrap items-center justify-start gap-2 sm:gap-2.5"
-                          >
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={turn.activeTab === "fused"}
-                          id={`tab-fused-${turn.id}`}
-                          aria-controls={`answer-panel-${turn.id}`}
-                          onClick={() =>
-                            patchTurn(turn.id, { activeTab: "fused" })
-                          }
-                          title="融合后的最佳答案"
-                          className={`flex shrink-0 items-center justify-center rounded-full border border-violet-500/20 bg-gradient-to-br from-violet-600/25 to-blue-600/25 text-amber-100 backdrop-blur-sm outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${
-                            turn.activeTab === "fused"
-                              ? "h-[3.25rem] w-[3.25rem] min-h-[3.25rem] min-w-[3.25rem] text-2xl"
-                              : "h-11 w-11 min-h-11 min-w-11 text-lg"
-                          } ${
-                            isDark
-                              ? "focus-visible:ring-offset-zinc-950"
-                              : "focus-visible:ring-offset-white"
-                          } ${
-                            turn.activeTab === "fused" ? tabActive : tabInactive
-                          }`}
-                        >
-                          ✨
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={turn.activeTab === "deepseek"}
-                          id={`tab-deepseek-${turn.id}`}
-                          aria-controls={`answer-panel-${turn.id}`}
-                          onClick={() =>
-                            patchTurn(turn.id, { activeTab: "deepseek" })
-                          }
-                          title="DeepSeek 原始回答"
-                          className={`relative shrink-0 rounded-full bg-white outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${
-                            turn.activeTab === "deepseek"
-                              ? "h-[3.25rem] w-[3.25rem] min-h-[3.25rem] min-w-[3.25rem]"
-                              : "h-11 w-11 min-h-11 min-w-11"
-                          } ${
-                            isDark
-                              ? "focus-visible:ring-offset-zinc-950"
-                              : "focus-visible:ring-offset-white"
-                          } ${
-                            turn.activeTab === "deepseek"
-                              ? tabActive
-                              : tabInactive
-                          }`}
-                        >
-                          <span className="absolute inset-0 overflow-hidden rounded-full bg-white">
-                            <Image
-                              src={DEEPSEEK_ICON_SRC}
-                              alt="DeepSeek"
-                              fill
-                              sizes={
-                                turn.activeTab === "deepseek" ? "52px" : "44px"
-                              }
-                              unoptimized
-                              className="bg-white object-contain p-1.5"
-                            />
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={turn.activeTab === "kimi"}
-                          id={`tab-kimi-${turn.id}`}
-                          aria-controls={`answer-panel-${turn.id}`}
-                          onClick={() =>
-                            patchTurn(turn.id, { activeTab: "kimi" })
-                          }
-                          title="Kimi 原始回答"
-                          className={`relative shrink-0 rounded-full bg-black outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${
-                            turn.activeTab === "kimi"
-                              ? "h-[3.25rem] w-[3.25rem] min-h-[3.25rem] min-w-[3.25rem]"
-                              : "h-11 w-11 min-h-11 min-w-11"
-                          } ${
-                            isDark
-                              ? "focus-visible:ring-offset-zinc-950"
-                              : "focus-visible:ring-offset-white"
-                          } ${turn.activeTab === "kimi" ? tabActive : tabInactive}`}
-                        >
-                          <span className="absolute inset-0 overflow-hidden rounded-full bg-black">
-                            <Image
-                              src="/brands/kimi.png"
-                              alt="Kimi"
-                              fill
-                              sizes={
-                                turn.activeTab === "kimi" ? "52px" : "44px"
-                              }
-                              className="object-contain p-2"
-                            />
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={turn.activeTab === "qwen"}
-                          id={`tab-qwen-${turn.id}`}
-                          aria-controls={`answer-panel-${turn.id}`}
-                          onClick={() =>
-                            patchTurn(turn.id, { activeTab: "qwen" })
-                          }
-                          title="Qwen 原始回答"
-                          className={`relative shrink-0 rounded-full bg-white outline-none transition-[width,height,box-shadow,filter] duration-300 ease-out hover:brightness-110 active:scale-[0.97] touch-manipulation ${tabFocus} ${
-                            turn.activeTab === "qwen"
-                              ? "h-[3.25rem] w-[3.25rem] min-h-[3.25rem] min-w-[3.25rem]"
-                              : "h-11 w-11 min-h-11 min-w-11"
-                          } ${
-                            isDark
-                              ? "focus-visible:ring-offset-zinc-950"
-                              : "focus-visible:ring-offset-white"
-                          } ${turn.activeTab === "qwen" ? tabActive : tabInactive}`}
-                        >
-                          <span className="absolute inset-0 overflow-hidden rounded-full bg-white">
-                            <Image
-                              src="/brands/qwen.png"
-                              alt="Qwen"
-                              fill
-                              sizes={
-                                turn.activeTab === "qwen" ? "52px" : "44px"
-                              }
-                              className="object-contain p-2"
-                            />
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                </div>
-
+                <div className="flex items-start gap-2.5 sm:gap-3">
+                  <AnswerTabEnterTransition
+                    activeTab={turn.activeTab}
+                    className="shrink-0"
+                  >
+                    <ChatAssistantAvatar activeTab={turn.activeTab} />
+                  </AnswerTabEnterTransition>
+                  <div className="min-w-0 flex-1 max-w-[min(100%,calc(100%-3.25rem))] sm:max-w-[min(100%,calc(100%-3.5rem))]">
                 <div
                   id={`answer-panel-${turn.id}`}
                   role="tabpanel"
@@ -1917,7 +2193,7 @@ export default function Home() {
                           ? `tab-kimi-${turn.id}`
                           : `tab-qwen-${turn.id}`
                   }
-                  className={`rounded-2xl border px-4 pb-6 pt-[calc(2.125rem+15pt)] backdrop-blur sm:px-6 sm:pb-6 sm:pt-[calc(2.125rem+17pt)] ${
+                  className={`rounded-2xl border px-4 py-4 backdrop-blur sm:px-6 sm:py-5 ${
                     isDark
                       ? "border-zinc-800 bg-zinc-900/70 shadow-[0_20px_50px_-20px_rgba(0,0,0,0.5)]"
                       : "border-zinc-200/90 bg-white/85 shadow-[0_24px_50px_-20px_rgba(91,33,182,0.12),0_8px_30px_-12px_rgba(0,0,0,0.08)]"
@@ -1930,23 +2206,26 @@ export default function Home() {
                     const revealSeen =
                       answerRevealSeenRef.current.has(revealKey);
                     return (
+                      <AnswerPanelHeightTransition activeTab={turn.activeTab}>
                       <AnswerPanelTabSwitch activeTab={turn.activeTab}>
-                        <h3
-                          className={`mb-3.5 text-center text-sm font-semibold uppercase tracking-wide leading-[1.8] sm:mb-3 ${
-                            isDark
-                              ? "text-violet-300/95"
-                              : "text-violet-700"
-                          }`}
-                        >
-                          {answerTitle}
-                        </h3>
+                        {answerTitle ? (
+                          <h3
+                            className={`mb-3.5 text-center text-sm font-semibold uppercase tracking-wide leading-[1.8] sm:mb-3 ${
+                              isDark
+                                ? "text-violet-300/95"
+                                : "text-violet-700"
+                            }`}
+                          >
+                            {answerTitle}
+                          </h3>
+                        ) : null}
                         {revealSeen ? (
                           <p
-                            className={`whitespace-pre-wrap break-words text-sm font-normal leading-[1.8] ${
+                            className={`answer-body-text whitespace-pre-wrap break-words text-sm font-normal leading-[1.8] ${
                               isDark ? "text-zinc-200" : "text-zinc-800"
                             }`}
                           >
-                            {answerBody}
+                            {renderAnswerBody(answerBody)}
                           </p>
                         ) : (
                           <div
@@ -1961,9 +2240,20 @@ export default function Home() {
                           </div>
                         )}
                       </AnswerPanelTabSwitch>
+                      </AnswerPanelHeightTransition>
                     );
                   })()}
+                  <AnswerSourceTabBar
+                    turnId={turn.id}
+                    activeTab={turn.activeTab}
+                    isDark={isDark}
+                    tabActive={tabActive}
+                    tabInactive={tabInactive}
+                    tabFocus={tabFocus}
+                    onSelect={(tab) => patchTurn(turn.id, { activeTab: tab })}
+                  />
                 </div>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -2078,7 +2368,7 @@ export default function Home() {
             </div>
           </div>
         </div>
-        </div>
+      </div>
       </div>
       )}
     </main>
@@ -2090,7 +2380,7 @@ export default function Home() {
             ? "border-zinc-700 bg-zinc-900/95 text-amber-200 shadow-lg shadow-black/40 hover:bg-zinc-800 hover:text-amber-100"
             : "border-zinc-300/80 bg-white/95 text-zinc-700 shadow-md shadow-violet-900/10 hover:bg-zinc-50"
         } ${
-          isDark ? "focus-visible:ring-offset-zinc-950" : "focus-visible:ring-offset-violet-50"
+          isDark ? "focus-visible:ring-offset-zinc-950" : "focus-visible:ring-offset-zinc-50"
         }`}
         aria-label={isDark ? "切换为浅色主题" : "切换为深色主题"}
         title={isDark ? "浅色模式" : "深色模式"}

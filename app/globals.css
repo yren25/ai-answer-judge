@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
+  --background: #fafafa;
   --foreground: #171717;
 }
 
@@ -124,40 +124,91 @@ body {
     transform: none;
   }
 
-  .answer-source-from-right,
-  .answer-source-from-left {
+  .answer-source-smart-in-right,
+  .answer-source-smart-in-left {
     animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+
+  .answer-panel-height-transition {
+    transition: none;
   }
 }
 
-/* 切换各 AI 答案 tab：按顺序左右滑入 */
-@keyframes answer-source-from-right {
+/* 切换各 AI 答案：轻滑 + 淡入 + 微缩放（Material 式 smart motion） */
+@keyframes answer-source-smart-in-right {
   from {
     opacity: 0;
-    transform: translate3d(14px, 0, 0);
+    transform: translate3d(20px, 4px, 0) scale(0.98);
+    filter: blur(4px);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
   }
 }
 
-@keyframes answer-source-from-left {
+@keyframes answer-source-smart-in-left {
   from {
     opacity: 0;
-    transform: translate3d(-14px, 0, 0);
+    transform: translate3d(-20px, 4px, 0) scale(0.98);
+    filter: blur(4px);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
   }
 }
 
-.answer-source-from-right {
-  animation: answer-source-from-right 300ms cubic-bezier(0.22, 1, 0.36, 1)
+.answer-source-smart-in-right {
+  animation: answer-source-smart-in-right 420ms cubic-bezier(0.22, 1, 0.36, 1)
     both;
+  will-change: transform, opacity, filter;
 }
 
-.answer-source-from-left {
-  animation: answer-source-from-left 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+.answer-source-smart-in-left {
+  animation: answer-source-smart-in-left 420ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+  will-change: transform, opacity, filter;
+}
+
+/* 切换答案来源时，对话框高度平滑过渡 */
+.answer-panel-height-transition {
+  overflow: hidden;
+  transition: height 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-panel-height-transition {
+    transition: none;
+  }
+}
+
+.answer-body-text {
+  font-family: var(--font-geist-sans), Arial, Helvetica, ui-emoji,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji", sans-serif;
+}
+
+/* 欢迎页招手机器人：无控件；白底视频用 multiply 融入页面纯色底 */
+.welcome-robot-video {
+  display: block;
+  max-width: none;
+  background: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+.welcome-robot-video::-webkit-media-controls,
+.welcome-robot-video::-webkit-media-controls-enclosure {
+  display: none !important;
+}
+
+.welcome-robot-video--cutout {
+  mix-blend-mode: multiply;
 }
