@@ -1,24 +1,13 @@
 import { NextResponse } from "next/server";
 
-const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
-const MODEL = "deepseek-chat";
+import { fuseAnswers } from "@/lib/fusion";
+import { isModelProviderError } from "@/lib/models/types";
 
 type FuseBody = {
   question?: unknown;
   deepseekAnswer?: unknown;
   kimiAnswer?: unknown;
-};
-
-type DeepSeekMessage = {
-  role: "system" | "user";
-  content: string;
-};
-
-type DeepSeekResponse = {
-  choices?: Array<{
-    message?: { content?: string };
-  }>;
-  error?: { message?: string };
+  qwenAnswer?: unknown;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -26,10 +15,10 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey?.trim()) {
     return NextResponse.json(
-      { error: "DEEPSEEK_API_KEY is not configured" },
+      { error: "融合服务未配置：请设置 ANTHROPIC_API_KEY" },
       { status: 500 },
     );
   }
@@ -41,7 +30,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { question, deepseekAnswer, kimiAnswer } = body;
+  const { question, deepseekAnswer, kimiAnswer, qwenAnswer } = body;
 
   if (!isNonEmptyString(question)) {
     return NextResponse.json(
@@ -64,59 +53,31 @@ export async function POST(request: Request) {
     );
   }
 
-  const messages: DeepSeekMessage[] = [
-    {
-      role: "system",
-      content:
-        "You are an expert AI judge. Compare two candidate answers for the same user question. " +
-        "Assess factuality, completeness, clarity, and usefulness. Then produce one merged final answer " +
-        "that is clearer, more reliable, and concise. Output only the final merged answer.",
-    },
-    {
-      role: "user",
-      content:
-        `User question:\n${question.trim()}\n\n` +
-        `Answer A (DeepSeek):\n${deepseekAnswer.trim()}\n\n` +
-        `Answer B (Kimi):\n${kimiAnswer.trim()}\n\n` +
-        "Please return the best fused answer.",
-    },
-  ];
+  if (!isNonEmptyString(qwenAnswer)) {
+    return NextResponse.json(
+      { error: 'Body must include a non-empty string field "qwenAnswer"' },
+      { status: 400 },
+    );
+  }
 
   try {
-    const res = await fetch(DEEPSEEK_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-      }),
+    const fusedAnswer = await fuseAnswers({
+      question: question.trim(),
+      deepseekAnswer: deepseekAnswer.trim(),
+      kimiAnswer: kimiAnswer.trim(),
+      qwenAnswer: qwenAnswer.trim(),
     });
-
-    const data = (await res.json()) as DeepSeekResponse;
-
-    if (!res.ok) {
-      const message = data.error?.message ?? `DeepSeek API error (${res.status})`;
-      return NextResponse.json(
-        { error: message },
-        { status: res.status >= 400 && res.status < 600 ? res.status : 502 },
-      );
-    }
-
-    const fusedAnswer = data.choices?.[0]?.message?.content?.trim();
-    if (!fusedAnswer) {
-      return NextResponse.json(
-        { error: "Empty or unexpected response from DeepSeek" },
-        { status: 502 },
-      );
-    }
 
     return NextResponse.json({ fusedAnswer });
   } catch (err) {
+    if (isModelProviderError(err)) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: err.status },
+      );
+    }
     const message =
-      err instanceof Error ? err.message : "Failed to reach DeepSeek API";
+      err instanceof Error ? err.message : "融合服务暂时不可用，请稍后重试";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

@@ -14,13 +14,150 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
+    /* 与页面 zinc-950 一致，避免露底时色差 */
+    --background: #09090b;
     --foreground: #ededed;
   }
+}
+
+html {
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Gemini 风格：答案自上而下「铺开」+ 高光带掠过（尊重减少动效） */
+.answer-gemini-reveal {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+}
+
+.answer-gemini-reveal::before {
+  content: "";
+  position: absolute;
+  inset: -0.25rem 0 auto 0;
+  height: min(42%, 9rem);
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.95;
+  animation: answer-gemini-sheen 1.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.answer-gemini-reveal-light::before {
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 36%,
+    rgba(139, 92, 246, 0.16) 50%,
+    rgba(59, 130, 246, 0.12) 54%,
+    transparent 68%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+}
+
+.answer-gemini-reveal-dark::before {
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 34%,
+    rgba(196, 181, 253, 0.22) 49%,
+    rgba(129, 140, 248, 0.14) 54%,
+    transparent 66%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+}
+
+@keyframes answer-gemini-sheen {
+  0% {
+    transform: translateY(-120%);
+    opacity: 0.85;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(calc(100% + 8rem));
+    opacity: 0;
+  }
+}
+
+.answer-gemini-reveal-text {
+  position: relative;
+  z-index: 0;
+  animation: answer-gemini-unfold 1.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes answer-gemini-unfold {
+  from {
+    opacity: 0.55;
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-0.2rem);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-gemini-reveal::before {
+    animation: none;
+    opacity: 0;
+  }
+
+  .answer-gemini-reveal-text {
+    animation: none;
+    opacity: 1;
+    clip-path: none;
+    transform: none;
+  }
+
+  .answer-source-from-right,
+  .answer-source-from-left {
+    animation: none;
+  }
+}
+
+/* 切换各 AI 答案 tab：按顺序左右滑入 */
+@keyframes answer-source-from-right {
+  from {
+    opacity: 0;
+    transform: translate3d(14px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes answer-source-from-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.answer-source-from-right {
+  animation: answer-source-from-right 300ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+}
+
+.answer-source-from-left {
+  animation: answer-source-from-left 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

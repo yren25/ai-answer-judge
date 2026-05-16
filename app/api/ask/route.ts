@@ -1,19 +1,10 @@
 import { NextResponse } from "next/server";
 
-const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
-const MODEL = "deepseek-chat";
+import { askDeepSeek } from "@/lib/models/deepseek";
+import { isModelProviderError } from "@/lib/models/types";
 
 type AskBody = {
   question?: unknown;
-};
-
-type DeepSeekMessage = { role: string; content: string };
-
-type DeepSeekResponse = {
-  choices?: Array<{
-    message?: { content?: string };
-  }>;
-  error?: { message?: string };
 };
 
 export async function POST(request: Request) {
@@ -44,39 +35,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await fetch(DEEPSEEK_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "user", content: question }] satisfies DeepSeekMessage[],
-      }),
-    });
-
-    const data = (await res.json()) as DeepSeekResponse;
-
-    if (!res.ok) {
-      const message =
-        data.error?.message ?? `DeepSeek API error (${res.status})`;
-      return NextResponse.json(
-        { error: message },
-        { status: res.status >= 400 && res.status < 600 ? res.status : 502 },
-      );
-    }
-
-    const answer = data.choices?.[0]?.message?.content?.trim();
-    if (!answer) {
-      return NextResponse.json(
-        { error: "Empty or unexpected response from DeepSeek" },
-        { status: 502 },
-      );
-    }
-
+    const answer = await askDeepSeek(question);
     return NextResponse.json({ answer });
   } catch (err) {
+    if (isModelProviderError(err)) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: err.status },
+      );
+    }
     const message =
       err instanceof Error ? err.message : "Failed to reach DeepSeek API";
     return NextResponse.json({ error: message }, { status: 502 });
